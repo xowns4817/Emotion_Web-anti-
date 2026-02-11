@@ -1,0 +1,36 @@
+# Java / Gradle
+backend/.gradle/
+backend/build/
+backend/bin/
+*.class
+*.jar
+*.war
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Python
+agent/__pycache__/
+agent/**/__pycache__/
+agent/.venv/
+*.pyc
+
+# MCP
+mcp-server/__pycache__/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Environment
+.env
+agent/.env
+
+# Docker
+postgres_data/
+
+# OS
+.DS_Store
+Thumbs.db
