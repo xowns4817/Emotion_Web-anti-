@@ -331,20 +331,72 @@ sequenceDiagram
 ### 7.2 LangGraph 워크플로우
 
 ```mermaid
-graph LR
-    START(["START"]) -->|"Edge"| EMOTION["감정 분석 Node"]
-    EMOTION -->|"결과를 State에 저장"| LG["LangGraph State"]
-    LG -->|"Edge: 다음 노드 실행"| CONTENT["콘텐츠 검색 Node"]
-    CONTENT -->|"결과를 State에 저장"| END_(["END"])
-    EMOTION -.->|"콜백: /callback/emotion"| SB["Spring Boot"]
-    CONTENT -.->|"콜백: /callback/content"| SB
-    CONTENT -.->|"MCP Protocol"| MCP["MCP Server"]
+graph TD
+    SB["Spring Boot"] -->|"POST /analyze"| FA["FastAPI"]
+    FA -->|"workflow.invoke()"| LG["LangGraph (StateGraph)"]
+
+    LG -->|"① State 전달"| EA["감정 분석 Node"]
+    EA -->|"② 결과 반환"| LG
+    EA -.->|"LLM 호출"| LLM["LLM API"]
+    EA -.->|"콜백"| SB
+
+    LG -->|"③ State 전달 (emotion_result 포함)"| CS["콘텐츠 검색 Node"]
+    CS -->|"④ 결과 반환"| LG
+    CS -.->|"MCP 호출"| MCP["MCP Server"]
+    CS -.->|"LLM 호출"| LLM
+    CS -.->|"콜백"| SB
+
+    LG -->|"⑤ 최종 State"| FA
 ```
 
 > [!NOTE]
-> 감정 분석 Node와 콘텐츠 검색 Node는 서로를 **직접 호출하지 않습니다**. LangGraph가 State를 통해 데이터를 전달하고, Edge 정의에 따라 다음 노드를 실행합니다.
+> **LangGraph가 오케스트레이터**: `add_edge` 순서대로 Node를 호출하고, Node가 반환한 dict를 `AgentState`에 **자동 머지**한 뒤 다음 Node에 전달합니다. Node끼리 직접 호출하지 않습니다.
 
-### 7.3 LangGraph 코드 구조 (의사코드)
+### 7.3 LangChain으로 구성할 경우 (비교)
+
+LangGraph 대신 **LangChain만** 사용할 경우, 오케스트레이션 구조가 다음과 같이 달라집니다:
+
+```mermaid
+graph LR
+    subgraph LangChain["LangChain SequentialChain 방식"]
+        START2(["입력"]) -->|"survey_answers"| EMOTION2["감정 분석 Chain"]
+        EMOTION2 -->|"output을 다음 input으로 직접 전달"| CONTENT2["콘텐츠 검색 Chain"]
+        CONTENT2 -->|"최종 결과"| END2(["출력"])
+    end
+```
+
+```python
+# LangChain SequentialChain 방식 (의사코드)
+emotion_chain = LLMChain(llm=llm, prompt=emotion_prompt, output_key="emotion_result")
+content_chain = LLMChain(llm=llm, prompt=content_prompt, output_key="content_results")
+
+# 순차 실행 — 앞의 output이 뒤의 input으로 자동 전달
+overall_chain = SequentialChain(
+    chains=[emotion_chain, content_chain],
+    input_variables=["survey_answers"],
+    output_variables=["emotion_result", "content_results"]
+)
+result = overall_chain.invoke({"survey_answers": answers})
+```
+
+#### LangGraph vs LangChain 비교
+
+| | **LangGraph (현재 채택 ✅)** | **LangChain Chain** |
+|---|---|---|
+| **오케스트레이션** | Graph Edge가 자동 제어 | SequentialChain이 순차 실행 |
+| **데이터 전달** | State에 저장 → 다음 노드가 읽음 | output → 다음 input으로 직접 전달 |
+| **Agent 간 결합도** | ❌ 서로 모름 (느슨한 결합) | ⚠️ output\_key로 연결 (약한 결합) |
+| **조건부 분기** | ✅ `conditional_edge`로 쉽게 가능 | ⚠️ `RouterChain` (제한적) |
+| **에러 처리** | ✅ 노드별 개별 처리 + State 전파 | ⚠️ 체인 전체 실패 |
+| **재시도 루프** | ✅ Edge로 루프 가능 | ❌ 어려움 |
+| **중간 콜백** | ✅ 노드마다 Spring Boot 콜백 가능 | ⚠️ 커스텀 콜백 핸들러 필요 |
+| **확장성** | ⭐⭐⭐ (노드/엣지 추가만으로 확장) | ⭐⭐ |
+| **학습 난이도** | 중간 | 낮음 |
+
+> [!TIP]
+> **현재 프로젝트에서 LangGraph를 채택한 이유**: 현재는 단순한 2단계 흐름이지만, 향후 감정별 다른 콘텐츠 Agent 분기, 콘텐츠 검증 후 재시도 루프, 병렬 검색 등의 확장이 예상되어 LangGraph를 선택했습니다.
+
+### 7.4 LangGraph 코드 구조 (의사코드)
 
 ```python
 # agent/app/graph/state.py
