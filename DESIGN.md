@@ -25,7 +25,7 @@ graph TB
 
     subgraph OL["🤖 오케스트레이션 레이어 — FastAPI + LangGraph"]
         F["FastAPI 에이전트 서버"]
-        G["LangGraph 워크플로우"]
+        G["LangGraph 워크플로우 (오케스트레이터)"]
         H["감정 분석 Agent (Node)"]
         I["콘텐츠 검색 Agent (Node)"]
     end
@@ -43,8 +43,10 @@ graph TB
     C --> AC
     AC -->|HTTP POST /analyze| F
     F --> G
-    G --> H
-    H --> I
+    G -->|"① State 전달"| H
+    H -->|"② 결과를 State에 반환"| G
+    G -->|"③ State 전달"| I
+    I -->|"④ 결과를 State에 반환"| G
     H -->|LLM 호출| LLM
     I -->|LLM 호출| LLM
     I -->|MCP Protocol| MCP
@@ -330,11 +332,17 @@ sequenceDiagram
 
 ```mermaid
 graph LR
-    START(["START"]) --> EMOTION["감정 분석 Node"]
-    EMOTION -->|"콜백: /callback/emotion"| CONTENT["콘텐츠 검색 Node"]
-    CONTENT -->|"콜백: /callback/content"| END_(["END"])
+    START(["START"]) -->|"Edge"| EMOTION["감정 분석 Node"]
+    EMOTION -->|"결과를 State에 저장"| LG["LangGraph State"]
+    LG -->|"Edge: 다음 노드 실행"| CONTENT["콘텐츠 검색 Node"]
+    CONTENT -->|"결과를 State에 저장"| END_(["END"])
+    EMOTION -.->|"콜백: /callback/emotion"| SB["Spring Boot"]
+    CONTENT -.->|"콜백: /callback/content"| SB
     CONTENT -.->|"MCP Protocol"| MCP["MCP Server"]
 ```
+
+> [!NOTE]
+> 감정 분석 Node와 콘텐츠 검색 Node는 서로를 **직접 호출하지 않습니다**. LangGraph가 State를 통해 데이터를 전달하고, Edge 정의에 따라 다음 노드를 실행합니다.
 
 ### 7.3 LangGraph 코드 구조 (의사코드)
 
